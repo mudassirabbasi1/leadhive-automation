@@ -37,7 +37,7 @@ I work with service businesses on practical website improvements, not generic re
 Would it be useful if I sent over a short before/after checklist for {business_name}?
 
 Best,
-Your Name
+{settings.smtp_from_name}
 
 {settings.unsubscribe_text}
 """
@@ -50,4 +50,3 @@ Your Name
         if len(labels) == 1:
             return labels[0] + "."
         return ", ".join(labels[:-1]) + f", and {labels[-1]}."
-
