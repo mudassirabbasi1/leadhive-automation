@@ -60,6 +60,5 @@ class LeadPipeline:
                 logger.exception("Skipping lead after pipeline failure", extra={"business": business.name})
 
         db.commit()
-        logger.info("Lead batch complete", extra={"batch_id": batch_id, "created": created})
+        logger.info("Lead batch complete", extra={"batch_id": batch_id, "created_count": created})
         return batch_id, created
-

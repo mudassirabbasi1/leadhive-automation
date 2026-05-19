@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from backend.app.schemas.jobs import LeadSearchRequest, LeadSearchResponse
 from backend.app.services.lead_pipeline import LeadPipeline
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/search", response_model=LeadSearchResponse)
@@ -26,10 +29,15 @@ def create_lead_search(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Lead search failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Lead search failed while contacting public data sources. Please retry in a moment.",
+        ) from exc
 
     return LeadSearchResponse(
         batch_id=batch_id,
         created=created,
         message=f"Created {created} draft outreach leads.",
     )
-

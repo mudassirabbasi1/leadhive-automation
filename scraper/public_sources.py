@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import requests
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
 from backend.app.core.config import get_settings
 
@@ -32,6 +32,20 @@ class PublicBusinessScraper:
 
     nominatim_url = "https://nominatim.openstreetmap.org/search"
     overpass_url = "https://overpass-api.de/api/interpreter"
+    overpass_mirrors = (
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+    )
+    known_city_bboxes = {
+        "austin": (30.098, -97.938, 30.516, -97.561),
+        "austin texas": (30.098, -97.938, 30.516, -97.561),
+        "new york": (40.477, -74.259, 40.917, -73.700),
+        "chicago": (41.644, -87.940, 42.023, -87.524),
+        "los angeles": (33.704, -118.668, 34.337, -118.155),
+        "houston": (29.523, -95.823, 30.111, -95.070),
+        "miami": (25.709, -80.319, 25.855, -80.139),
+    }
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -39,11 +53,22 @@ class PublicBusinessScraper:
         self.session.headers.update({"User-Agent": self.settings.public_source_user_agent})
 
     def search(self, city: str, niche: str, limit: int = 15) -> list[BusinessResult]:
-        bbox = self._geocode_city(city)
-        if not bbox:
-            raise ValueError(f"Could not find a public map boundary for {city}.")
+        query_limit = max(limit * 5, 25)
+        raw_elements = self._query_by_known_bbox(city=city, niche=niche, limit=query_limit)
+        if not raw_elements:
+            raw_elements = self._query_by_public_area(city=city, niche=niche, limit=query_limit)
+        if not raw_elements:
+            try:
+                bbox = self._geocode_city(city)
+            except RetryError as exc:
+                raise ValueError(
+                    "The public city lookup source rejected this request. Try another city spelling, "
+                    "or wait a few minutes and retry."
+                ) from exc
+            if not bbox:
+                raise ValueError(f"Could not find a public map boundary for {city}.")
+            raw_elements = self._query_overpass(bbox=bbox, limit=query_limit)
 
-        raw_elements = self._query_overpass(bbox=bbox, limit=max(limit * 5, 25))
         candidates = [self._element_to_business(element) for element in raw_elements]
         filtered = self._filter_by_niche(candidates, raw_elements, niche)
 
@@ -51,6 +76,26 @@ class PublicBusinessScraper:
         filtered.sort(key=lambda item: (item.website is None, item.email is None, item.name))
         unique = self._dedupe(filtered)
         return unique[:limit]
+
+    def _query_by_known_bbox(self, city: str, niche: str, limit: int) -> list[dict[str, Any]]:
+        bbox = self.known_city_bboxes.get(self._city_key(city))
+        if not bbox:
+            return []
+        try:
+            return self._query_overpass_bbox_niche(bbox=bbox, niche=niche, limit=limit)
+        except RetryError:
+            logger.warning("Known bbox lookup failed", extra={"city": city})
+            return []
+
+    def _query_by_public_area(self, city: str, niche: str, limit: int) -> list[dict[str, Any]]:
+        area_name = self._city_area_name(city)
+        if not area_name:
+            return []
+        try:
+            return self._query_overpass_area(area_name=area_name, niche=niche, limit=limit)
+        except RetryError:
+            logger.warning("Overpass area lookup failed", extra={"city": city})
+            return []
 
     @retry(wait=wait_exponential(multiplier=1, min=1, max=6), stop=stop_after_attempt(3))
     def _geocode_city(self, city: str) -> tuple[float, float, float, float] | None:
@@ -85,13 +130,65 @@ class PublicBusinessScraper:
         );
         out center tags {limit};
         """
-        response = self.session.post(
-            self.overpass_url,
-            data={"data": query},
-            timeout=self.settings.scraper_request_timeout + 15,
-        )
-        response.raise_for_status()
-        return response.json().get("elements", [])
+        return self._post_overpass(query=query, timeout=self.settings.scraper_request_timeout + 15)
+
+    @retry(wait=wait_exponential(multiplier=1, min=1, max=6), stop=stop_after_attempt(2))
+    def _query_overpass_bbox_niche(
+        self, bbox: tuple[float, float, float, float], niche: str, limit: int
+    ) -> list[dict[str, Any]]:
+        south, west, north, east = bbox
+        safe_niche = self._escape_overpass_regex(niche)
+        query = f"""
+        [out:json][timeout:25];
+        (
+          nwr["name"~"{safe_niche}",i]({south},{west},{north},{east});
+          nwr["amenity"~"{safe_niche}",i]({south},{west},{north},{east});
+          nwr["shop"~"{safe_niche}",i]({south},{west},{north},{east});
+          nwr["office"~"{safe_niche}",i]({south},{west},{north},{east});
+          nwr["craft"~"{safe_niche}",i]({south},{west},{north},{east});
+          nwr["healthcare"~"{safe_niche}",i]({south},{west},{north},{east});
+        );
+        out center tags {limit};
+        """
+        return self._post_overpass(query=query, timeout=self.settings.scraper_request_timeout + 15)
+
+    @retry(wait=wait_exponential(multiplier=1, min=1, max=6), stop=stop_after_attempt(3))
+    def _query_overpass_area(self, area_name: str, niche: str, limit: int) -> list[dict[str, Any]]:
+        safe_area_name = self._escape_overpass_string(area_name)
+        safe_niche = self._escape_overpass_regex(niche)
+        query = f"""
+        [out:json][timeout:25];
+        area["name"="{safe_area_name}"]["boundary"="administrative"]->.searchArea;
+        (
+          nwr["name"~"{safe_niche}",i](area.searchArea);
+          nwr["amenity"~"{safe_niche}",i](area.searchArea);
+          nwr["shop"~"{safe_niche}",i](area.searchArea);
+          nwr["office"~"{safe_niche}",i](area.searchArea);
+          nwr["craft"~"{safe_niche}",i](area.searchArea);
+          nwr["healthcare"~"{safe_niche}",i](area.searchArea);
+        );
+        out center tags {limit};
+        """
+        return self._post_overpass(query=query, timeout=self.settings.scraper_request_timeout + 20)
+
+    def _post_overpass(self, query: str, timeout: int) -> list[dict[str, Any]]:
+        last_error: Exception | None = None
+        for url in self.overpass_mirrors:
+            try:
+                response = self.session.post(
+                    url,
+                    data={"data": query},
+                    headers={"Accept": "application/json"},
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                return response.json().get("elements", [])
+            except requests.RequestException as exc:
+                last_error = exc
+                logger.warning("Overpass mirror failed", extra={"url": url, "error": str(exc)})
+        if last_error:
+            raise last_error
+        return []
 
     def _element_to_business(self, element: dict[str, Any]) -> BusinessResult:
         tags = element.get("tags", {})
@@ -163,3 +260,29 @@ class PublicBusinessScraper:
         text = str(value).strip()
         return text or None
 
+    def _city_area_name(self, city: str) -> str:
+        # Overpass area search works best with the municipality name.
+        return city.split(",", 1)[0].strip()
+
+    def _city_key(self, city: str) -> str:
+        return re.sub(r"\s+", " ", city.replace(",", " ").strip().lower())
+
+    def _escape_overpass_string(self, value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    def _escape_overpass_regex(self, value: str) -> str:
+        words = [word for word in re.split(r"\W+", value.lower()) if len(word) > 2]
+        if not words:
+            return ".*"
+        aliases = {
+            "dentist": ["dentist", "dental", "orthodont"],
+            "doctor": ["doctor", "clinic", "medical", "physician"],
+            "plumber": ["plumber", "plumbing"],
+            "restaurant": ["restaurant", "cafe", "food"],
+            "lawyer": ["lawyer", "attorney", "legal"],
+        }
+        patterns: list[str] = []
+        for word in words:
+            patterns.extend(aliases.get(word, [word]))
+        escaped = [re.escape(pattern) for pattern in patterns]
+        return "|".join(escaped).replace('"', '\\"')
