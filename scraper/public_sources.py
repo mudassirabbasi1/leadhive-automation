@@ -274,6 +274,8 @@ class PublicBusinessScraper:
             "restaurant": ["restaurant", "cafe", "food"],
             "lawyer": ["lawyer", "attorney", "legal"],
             "furniture": ["furniture", "furnishing", "home"],
+            "gym": ["gym", "fitness", "training", "crossfit"],
+            "gyms": ["gym", "fitness", "training", "crossfit"],
         }
         patterns: list[str] = []
         for word in words:
@@ -284,32 +286,53 @@ class PublicBusinessScraper:
     def _overpass_niche_filters(self, niche: str, location: str) -> str:
         words = set(word for word in re.split(r"\W+", niche.lower()) if len(word) > 2)
         if {"furniture", "furnishing", "furnishings"} & words:
-            return "\n          ".join(
+            return self._require_public_email_filters(
                 [
-                    f'nwr["shop"="furniture"]{location};',
-                    f'nwr["shop"="interior_decoration"]{location};',
-                    f'nwr["shop"="bed"]{location};',
-                    f'nwr["shop"="kitchen"]{location};',
-                    f'nwr["name"~"furniture|furnishing",i]{location};',
-                ]
+                    '["shop"="furniture"]',
+                    '["shop"="interior_decoration"]',
+                    '["shop"="bed"]',
+                    '["shop"="kitchen"]',
+                    '["name"~"furniture|furnishing",i]',
+                ],
+                location,
+            )
+        if {"gym", "gyms", "fitness", "crossfit"} & words:
+            return self._require_public_email_filters(
+                [
+                    '["leisure"="fitness_centre"]',
+                    '["sport"="fitness"]',
+                    '["amenity"="gym"]',
+                    '["shop"="fitness"]',
+                    '["name"~"gym|fitness|crossfit|training",i]',
+                ],
+                location,
             )
         if {"dentist", "dental", "orthodontist"} & words:
-            return "\n          ".join(
+            return self._require_public_email_filters(
                 [
-                    f'nwr["amenity"="dentist"]{location};',
-                    f'nwr["healthcare"="dentist"]{location};',
-                    f'nwr["name"~"dentist|dental|orthodont",i]{location};',
-                ]
+                    '["amenity"="dentist"]',
+                    '["healthcare"="dentist"]',
+                    '["name"~"dentist|dental|orthodont",i]',
+                ],
+                location,
             )
 
         safe_niche = self._escape_overpass_regex(niche)
-        return "\n          ".join(
+        return self._require_public_email_filters(
             [
-                f'nwr["amenity"~"{safe_niche}",i]{location};',
-                f'nwr["shop"~"{safe_niche}",i]{location};',
-                f'nwr["office"~"{safe_niche}",i]{location};',
-                f'nwr["craft"~"{safe_niche}",i]{location};',
-                f'nwr["healthcare"~"{safe_niche}",i]{location};',
-                f'nwr["name"~"{safe_niche}",i]{location};',
-            ]
+                f'["amenity"~"{safe_niche}",i]',
+                f'["shop"~"{safe_niche}",i]',
+                f'["office"~"{safe_niche}",i]',
+                f'["craft"~"{safe_niche}",i]',
+                f'["healthcare"~"{safe_niche}",i]',
+                f'["name"~"{safe_niche}",i]',
+            ],
+            location,
         )
+
+    def _require_public_email_filters(self, base_filters: list[str], location: str) -> str:
+        lines: list[str] = []
+        for base_filter in base_filters:
+            lines.append(f'nwr{base_filter}["email"]{location};')
+            lines.append(f'nwr{base_filter}["contact:email"]{location};')
+        return "\n          ".join(lines)
