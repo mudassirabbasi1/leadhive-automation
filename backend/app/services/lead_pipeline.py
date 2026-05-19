@@ -35,6 +35,12 @@ class LeadPipeline:
                 continue
             try:
                 analysis = self.analyzer.analyze(business.website)
+                if analysis.score >= 70:
+                    logger.info(
+                        "Skipping lead with acceptable website score",
+                        extra={"business": business.name, "quality_score": analysis.score},
+                    )
+                    continue
                 email = self.email_generator.generate(
                     business_name=business.name,
                     niche=niche,
