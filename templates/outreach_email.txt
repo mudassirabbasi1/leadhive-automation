@@ -1,0 +1,11 @@
+Hi {{ business_name }} team,
+
+I was reviewing {{ website_or_listing }} while researching {{ niche }} businesses in {{ city }}. I noticed {{ issue_summary }}.
+
+I help local businesses improve website trust, clarity, and inquiry conversion with practical fixes. Would you be open to a short checklist of quick wins for {{ business_name }}?
+
+Best,
+Your Name
+
+{{ unsubscribe_text }}
+

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Environment and secrets
+.env
+backend/.env
+frontend/.env
+
+# Databases and generated data
+database/*.db
+database/*.sqlite
+*.csv
+
+# Node
+node_modules/
+dist/
+frontend/node_modules/
+frontend/dist/
+logs/
+
+# Editors
+.vscode/
+.idea/
