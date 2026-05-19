@@ -137,16 +137,11 @@ class PublicBusinessScraper:
         self, bbox: tuple[float, float, float, float], niche: str, limit: int
     ) -> list[dict[str, Any]]:
         south, west, north, east = bbox
-        safe_niche = self._escape_overpass_regex(niche)
+        filters = self._overpass_niche_filters(niche=niche, location=f"({south},{west},{north},{east})")
         query = f"""
         [out:json][timeout:25];
         (
-          nwr["name"~"{safe_niche}",i]({south},{west},{north},{east});
-          nwr["amenity"~"{safe_niche}",i]({south},{west},{north},{east});
-          nwr["shop"~"{safe_niche}",i]({south},{west},{north},{east});
-          nwr["office"~"{safe_niche}",i]({south},{west},{north},{east});
-          nwr["craft"~"{safe_niche}",i]({south},{west},{north},{east});
-          nwr["healthcare"~"{safe_niche}",i]({south},{west},{north},{east});
+          {filters}
         );
         out center tags {limit};
         """
@@ -155,17 +150,12 @@ class PublicBusinessScraper:
     @retry(wait=wait_exponential(multiplier=1, min=1, max=6), stop=stop_after_attempt(3))
     def _query_overpass_area(self, area_name: str, niche: str, limit: int) -> list[dict[str, Any]]:
         safe_area_name = self._escape_overpass_string(area_name)
-        safe_niche = self._escape_overpass_regex(niche)
+        filters = self._overpass_niche_filters(niche=niche, location="(area.searchArea)")
         query = f"""
         [out:json][timeout:25];
         area["name"="{safe_area_name}"]["boundary"="administrative"]->.searchArea;
         (
-          nwr["name"~"{safe_niche}",i](area.searchArea);
-          nwr["amenity"~"{safe_niche}",i](area.searchArea);
-          nwr["shop"~"{safe_niche}",i](area.searchArea);
-          nwr["office"~"{safe_niche}",i](area.searchArea);
-          nwr["craft"~"{safe_niche}",i](area.searchArea);
-          nwr["healthcare"~"{safe_niche}",i](area.searchArea);
+          {filters}
         );
         out center tags {limit};
         """
@@ -280,9 +270,43 @@ class PublicBusinessScraper:
             "plumber": ["plumber", "plumbing"],
             "restaurant": ["restaurant", "cafe", "food"],
             "lawyer": ["lawyer", "attorney", "legal"],
+            "furniture": ["furniture", "furnishing", "home"],
         }
         patterns: list[str] = []
         for word in words:
             patterns.extend(aliases.get(word, [word]))
         escaped = [re.escape(pattern) for pattern in patterns]
         return "|".join(escaped).replace('"', '\\"')
+
+    def _overpass_niche_filters(self, niche: str, location: str) -> str:
+        words = set(word for word in re.split(r"\W+", niche.lower()) if len(word) > 2)
+        if {"furniture", "furnishing", "furnishings"} & words:
+            return "\n          ".join(
+                [
+                    f'nwr["shop"="furniture"]{location};',
+                    f'nwr["shop"="interior_decoration"]{location};',
+                    f'nwr["shop"="bed"]{location};',
+                    f'nwr["shop"="kitchen"]{location};',
+                    f'nwr["name"~"furniture|furnishing",i]{location};',
+                ]
+            )
+        if {"dentist", "dental", "orthodontist"} & words:
+            return "\n          ".join(
+                [
+                    f'nwr["amenity"="dentist"]{location};',
+                    f'nwr["healthcare"="dentist"]{location};',
+                    f'nwr["name"~"dentist|dental|orthodont",i]{location};',
+                ]
+            )
+
+        safe_niche = self._escape_overpass_regex(niche)
+        return "\n          ".join(
+            [
+                f'nwr["amenity"~"{safe_niche}",i]{location};',
+                f'nwr["shop"~"{safe_niche}",i]{location};',
+                f'nwr["office"~"{safe_niche}",i]{location};',
+                f'nwr["craft"~"{safe_niche}",i]{location};',
+                f'nwr["healthcare"~"{safe_niche}",i]{location};',
+                f'nwr["name"~"{safe_niche}",i]{location};',
+            ]
+        )
