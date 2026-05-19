@@ -23,10 +23,16 @@ class LeadPipeline:
 
     def run(self, db: Session, user: User, city: str, niche: str, limit: int) -> tuple[str, int]:
         batch_id = str(uuid4())
-        businesses = self.scraper.search(city=city, niche=niche, limit=limit)
+        # Pull extra public candidates because many listings do not publish email addresses.
+        businesses = self.scraper.search(city=city, niche=niche, limit=min(limit * 5, 100))
         created = 0
 
         for business in businesses:
+            if created >= limit:
+                break
+            if not business.email:
+                logger.info("Skipping lead without public email", extra={"business": business.name})
+                continue
             try:
                 analysis = self.analyzer.analyze(business.website)
                 email = self.email_generator.generate(
