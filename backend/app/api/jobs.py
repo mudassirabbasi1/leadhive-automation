@@ -36,8 +36,9 @@ def create_lead_search(
             detail="Lead search failed while contacting public data sources. Please retry in a moment.",
         ) from exc
 
-    return LeadSearchResponse(
-        batch_id=batch_id,
-        created=created,
-        message=f"Created {created} draft outreach leads.",
+    message = (
+        f"Created {created} draft outreach leads."
+        if created
+        else "No qualified leads found with a public email and website score below 70."
     )
+    return LeadSearchResponse(batch_id=batch_id, created=created, message=message)

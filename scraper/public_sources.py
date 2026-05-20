@@ -57,7 +57,10 @@ class PublicBusinessScraper:
 
     def search(self, city: str, niche: str, limit: int = 15) -> list[BusinessResult]:
         query_limit = max(limit * 5, 25)
+        known_bbox = self.known_city_bboxes.get(self._city_key(city))
         raw_elements = self._query_by_known_bbox(city=city, niche=niche, limit=query_limit)
+        if known_bbox and not raw_elements:
+            return []
         if not raw_elements:
             raw_elements = self._query_by_public_area(city=city, niche=niche, limit=query_limit)
         if not raw_elements:
@@ -276,6 +279,9 @@ class PublicBusinessScraper:
             "furniture": ["furniture", "furnishing", "home"],
             "gym": ["gym", "fitness", "training", "crossfit"],
             "gyms": ["gym", "fitness", "training", "crossfit"],
+            "estate": ["estate", "realtor", "realty", "broker"],
+            "realtor": ["realtor", "realty", "estate", "broker"],
+            "realty": ["realty", "realtor", "estate", "broker"],
         }
         patterns: list[str] = []
         for word in words:
@@ -304,6 +310,15 @@ class PublicBusinessScraper:
                     '["amenity"="gym"]',
                     '["shop"="fitness"]',
                     '["name"~"gym|fitness|crossfit|training",i]',
+                ],
+                location,
+            )
+        if {"estate", "real", "realtor", "realty", "broker"} & words:
+            return self._require_public_email_filters(
+                [
+                    '["office"="estate_agent"]',
+                    '["shop"="estate_agent"]',
+                    '["name"~"real estate|realtor|realty|broker|properties",i]',
                 ],
                 location,
             )
